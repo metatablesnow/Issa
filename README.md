@@ -2,7 +2,7 @@
 <img src="./gh-assets/issa.svg" width="50%">
 <br>
 <br>
-	Runtime validation with precise errors and real types.
+	Runtime Validation With Beautiful Errors and Real Types
 </div>
 
 ---

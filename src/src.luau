@@ -28,13 +28,13 @@ export type Predicate<T> = typeof(setmetatable(
 	{} :: {
 		kind: string,
 		_check: (self: any, input: unknown) -> Result,
-		--Try: (self: Predicate<T>, input: unknown) -> (boolean, T | ErrorInfo),
+		Try: (self: Predicate<T>, input: unknown) -> (boolean, string | T),
 		Type: (self: Predicate<T>) -> T,
 	},
 	{} :: {
 		__call: (self: Predicate<T>, input: unknown) -> T,
 	}
-	))
+))
 
 local function pass(): Result
 	return { ok = true, error = {} }
@@ -434,16 +434,16 @@ function Predicate.__call<T>(self: Predicate<T>, input: unknown): T
 		return input :: any
 	end
 
-	error(formatPrettyErr(input, result.error), 2)
+	error(formatPrettyErr(input, result.error))
 end
 
-function Predicate.Try<T>(self: Predicate<T>, input: unknown): (boolean, T | ErrorInfo)
+function Predicate.Try<T>(self: Predicate<T>, input: unknown): (boolean, T | string)
 	local result = (self :: any):_check(input) :: Result
 	if result.ok then
 		return true, input :: any
 	end
 
-	return false, result.error
+	return false, formatPrettyErr(input, result.error)
 end
 
 function Predicate.Type<T>(_self: Predicate<T>): T
