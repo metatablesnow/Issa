@@ -1,15 +1,16 @@
-<h1 align="center">🧶 Issa</h1>
-
 <div align="center">
+<img src="./gh-assets/issa.svg" width="80%">
+<br>
+<br>
 	Runtime validation with precise errors and real types.
 </div>
 
 ---
 
 ### Features
-- 🔍 Types from runtime checks
-- 🌻 Pretty yet precise errors
-- 🧶 Small, composable predicates
+- Types from runtime checks
+- Pretty yet precise errors
+- Small, composable predicates
 
 #### Guide
 
