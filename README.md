@@ -56,7 +56,7 @@ local IsAnimal = Is.Interface({
 
 or even refine them:
 
-```
+```lua
 local IsAdult = IsAge:Refine(function(fail, pass, age)
     if age < 18 then
         return fail("age is below 18")
