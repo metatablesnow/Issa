@@ -12,7 +12,7 @@
 - Pretty yet precise errors
 - Small, composable predicates
 
-#### Guide
+### Guide
 
 Every function in `Is` returns a `Predicate`.
 
@@ -25,7 +25,7 @@ IsAge = Is.Number()
 You can call a predicate:
 
 ```lua
-local age = IsAge(18) -- This will pass, and return the input (18)!
+local age = IsAge(18) -- This will pass, and return the input (18)
 IsAge("Oops!") -- This will error
 ```
 
@@ -43,11 +43,27 @@ type Age = typeof(IsAge:Type())
 
 local bobsAge: Age = "Oops!" -- This will warn you!
 ```
-or even use them to build more complex predicates:
+use them to build more complex predicates:
 ```lua
--- This constructs a new predicate, with all of the same features listed above!
+-- Predicates are chainable!
+local IsAgeOrName = IsAge:Or(Is.String())
+
 local IsAnimal = Is.Interface({
     Name = Is.Number()
     Age = IsAge
 }) 
+```
+
+or even refine them:
+
+```
+local IsAdult = IsAge:Refine(function(fail, pass, age)
+    if age < 18 then
+        return fail("age is below 18")
+    end
+
+    return pass()
+end)
+
+IsAdult(13) -- This will error!
 ```

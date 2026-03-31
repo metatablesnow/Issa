@@ -1,6 +1,4 @@
 --!strict
-export type Range = { number } | {min: number, max: number}
-
 type PathSegment =
 	{ kind: "field", key: string }
 | { kind: "index", key: number }
@@ -89,19 +87,6 @@ local function failFromChild(err: ErrorInfo, segment: PathSegment): Result
 			path = copyPath(err.path, segment, true),
 		}
 	}
-end
-
-local function inRange(range: Range, input: number): boolean
-	local min = range[1] or (range :: never).min
-	local max = range[2] or (range :: never).max
-
-	if min and input < min then
-		return false
-	end
-	if max and input > max then
-		return false
-	end
-	return true
 end
 
 local function truncate(str: string, maxLen: number): string
@@ -407,8 +392,15 @@ Is.__index = Is
 
 type IsMethods<T> = {
 	kind: string,
-	_check: (self: Is<T>, input: unknown) -> Result,
-	Type: (self: Is<T>) -> T,
+	_predicate: (self: Is<T>, input: unknown) -> Result,
+	Refine: (
+		self: Is<T>,
+		refinement: (
+			fail: (message: string) -> Result,
+			pass: () -> Result,
+			input: T
+		) -> Result
+	) -> Is<T>,
 }
 
 type IsMetatable<T> = {
@@ -418,7 +410,7 @@ type IsMetatable<T> = {
 
 export type Is<T> = typeof(setmetatable(
 	{} :: IsMethods<T>,
-	{} :: IsMetatable<T>
+	{} :: typeof(Is)
 ))
 
 local function pass(): Result
@@ -440,7 +432,7 @@ end
 function Is.new <T>(kind: string, check: (self: Is<T>, input: unknown) -> Result): Is<T>
 	return setmetatable({
 		kind = kind,
-		_check = check,
+		_predicate = check,
 }, Is) :: Is<T>
 end
 
@@ -457,7 +449,7 @@ local function TypeOf(typeName: string): () -> Is<any>
 end
 
 function Is.__call<T>(self: Is<any>, input: T): T
-	local result = (self :: any):_check(input) :: Result
+	local result = (self :: any):_predicate(input) :: Result
 	if result.ok then
 		return input :: any
 	end
@@ -466,7 +458,7 @@ function Is.__call<T>(self: Is<any>, input: T): T
 end
 
 function Is.Try<T>(self: Is<T>, input: unknown): (boolean, T | string)
-	local result = (self :: any):_check(input) :: Result
+	local result = (self :: any):_predicate(input) :: Result
 	if result.ok then
 		return true, input :: any
 	end
@@ -478,6 +470,30 @@ function Is.Type<T>(_self: Is<T>): T
 	return (nil :: any) :: T
 end
 
+function Is.Refine<T>(
+	predicate: Is<T>,
+	refinement: (
+		fail: (message: string) -> Result,
+		pass: () -> Result,
+		input: T
+	) -> Result
+): Is<T>
+	local predicateCheck = predicate._predicate
+
+	return Is.new(predicate.kind, function(self, input)
+		local predicateCheckResult: Result = predicateCheck(self, input)
+
+		if not predicateCheckResult.ok then
+			return predicateCheckResult
+		end
+
+		local refinementFail = function(message: string): Result
+			return fail(self.kind, input, message)
+		end
+
+		return refinement(refinementFail, pass, input :: T)
+	end)
+end
 function Is.Predicate<T>(): Is<Is<T>>
 	return Is.new("predicate", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
@@ -512,7 +528,7 @@ Is.Exact = Is.Literal
 
 function Is.Not<T>(predicate: Is<T>): Is<unknown>
 	return Is.new("not", function(self, input: unknown): Result
-		if predicate:_check(input).ok then
+		if predicate:_predicate(input).ok then
 			return fail(self.kind, input, `expected not "{predicate.kind}" got "{input}"`)
 		end
 
@@ -526,7 +542,7 @@ function Is.Optional<T>(predicate: Is<T>): Is<T?>
 			return pass()
 		end
 
-		return (predicate :: any):_check(input)
+		return (predicate :: any):_predicate(input)
 	end)
 end
 
@@ -543,32 +559,12 @@ Is.Table = TypeOf("table") :: () -> Is<{ [any]: any }>
 Is.Buffer = TypeOf("buffer") :: () -> Is<buffer>
 Is.Unknown = TypeOf("unknown") :: () -> Is<unknown>
 Is.UserData = TypeOf("userdata") :: () -> Is<unknown>
+Is.Number = TypeOf("number") :: () -> Is<number>
 
 function Is.Never()
 	return Is.new("never", function()
 		error("value is never allowed")
 	end)
-end
-
-function Is.Number(limits: {
-	range: Range?,
-	integer: boolean?,
-}?): Is<number>
-	return Is.new("number", function(self, input: unknown): Result
-		if typeof(input) ~= "number" then
-			return fail(self.kind, input)
-		end
-
-		if limits and limits.integer and input % 1 ~= 0 then
-			return fail(self.kind, input, "input is not an integer")
-		end
-
-		if limits and limits.range and not inRange(limits.range, input) then
-			return fail(self.kind, input, "input outside of range")
-		end
-
-		return pass()
-	end) :: Is<number>
 end
 
 --[[
@@ -584,12 +580,12 @@ function Is.Map<K, V>(expectedKey: Is<K>, expectedValue: Is<V>): Is<{ [K]: V }>
 		local tbl = input :: { [any]: any }
 
 		for key, value in tbl do
-			local keyResult = expectedKey:_check(key)
+			local keyResult = expectedKey:_predicate(key)
 			if not keyResult.ok then
 				return failFromChild(keyResult.error, { kind = "key", key = key })
 			end
 
-			local valueResult = expectedValue:_check(value)
+			local valueResult = expectedValue:_predicate(value)
 			if not valueResult.ok then
 				return failFromChild(valueResult.error, { kind = "key", key = key })
 			end
@@ -601,6 +597,14 @@ end
 
 function Is.Set<T>(key: Is<T>): Is<{ [T]: true }>
 	return Is.Map(key, Is.Literal(true)) :: Is<{ [T]: true }>
+end
+
+function Is.Keys<T>(predicate: Is<T>): Is<{[T]: any}>
+	return Is.Map(predicate, Is.Any())
+end
+
+function Is.Values<T>(predicate: Is<T>): Is<{[any]: T}>
+	return Is.Map(Is.Any(), predicate)
 end
 
 function Is.Array<T>(predicate: Is<T>?): Is<{ [number]: T }>
@@ -625,7 +629,7 @@ function Is.Array<T>(predicate: Is<T>?): Is<{ [number]: T }>
 			end
 
 			if predicate then
-				local result = (predicate :: Is<any>):_check(value)
+				local result = (predicate :: Is<any>):_predicate(value)
 				if not result.ok then
 					return failFromChild(result.error, { kind = "index", key = key })
 				end
@@ -647,7 +651,34 @@ type function Interface(shape)
 	return out
 end
 
-function Is.Interface<S>(shape: S, strict: boolean?): Is<Interface<S>>
+function Is.Interface<S, T>(shape: S): Is<Interface<S>>
+	return Is.new("interface", function(self, input: unknown): Result
+		if typeof(input) ~= "table" then
+			return fail(self.kind, input, "input is not a table")
+		end
+
+		local tbl = input :: { [any]: any }
+
+		for key, _ in tbl do
+			if typeof(key) ~= "string" then
+				return fail("string", key, "non-string key in interface", {
+					{ kind = "key", key = key },
+				})
+			end
+		end
+
+		for key, predicate in (shape :: { [string]: Is<any>? }) do
+			local result = (predicate :: Is<any>):_predicate(tbl[key])
+			if not result.ok then
+				return failFromChild(result.error, { kind = "field", key = key })
+			end
+		end
+
+		return pass()
+	end) :: Is<Interface<S>>
+end
+
+function Is.StrictInterface<S, T>(shape: S, strict: boolean?): Is<Interface<S> & {[never]: never}>
 	return Is.new("interface", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
 			return fail(self.kind, input, "input is not a table")
@@ -670,7 +701,7 @@ function Is.Interface<S>(shape: S, strict: boolean?): Is<Interface<S>>
 		end
 
 		for key, predicate in (shape :: { [string]: Is<any>? }) do
-			local result = (predicate :: Is<any>):_check(tbl[key])
+			local result = (predicate :: Is<any>):_predicate(tbl[key])
 			if not result.ok then
 				return failFromChild(result.error, { kind = "field", key = key })
 			end
@@ -679,6 +710,9 @@ function Is.Interface<S>(shape: S, strict: boolean?): Is<Interface<S>>
 		return pass()
 	end) :: Is<Interface<S>>
 end
+
+Is.Structure = Is.Interface
+Is.StrictStructure = Is.StrictInterface
 
 --[[
 	Combination Types
@@ -690,7 +724,7 @@ local intersection = function(...)
 	return Is.new("intersection", function(_self, input: unknown): Result
 		for _, predicate in predicates do
 			if predicate ~= nil then
-				local result = predicate:_check(input)
+				local result = predicate:_predicate(input)
 				if not result.ok then
 					return result
 				end
@@ -715,7 +749,7 @@ local union = (function(...)
 
 	return Is.new("union", function(self, input: unknown): Result
 		for _, predicate in predicates do
-			if predicate:_check(input).ok then
+			if predicate:_predicate(input).ok then
 				return pass()
 			end
 		end
@@ -786,6 +820,8 @@ Is.UDim2 = TypeOf("UDim2") :: () -> Is<UDim2>
 Is.ValueCurveKey = TypeOf("ValueCurveKey") :: () -> Is<ValueCurveKey>
 Is.Vector2 = TypeOf("Vector2") :: () -> Is<Vector2>
 Is.Vector2int16 = TypeOf("Vector2int16") :: () -> Is<Vector2int16>
+Is.Vector3 = TypeOf("Vector3") :: () -> Is<Vector3>
+Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Is<Vector3int16>
 Is.Vector3 = TypeOf("Vector3") :: () -> Is<Vector3>
 Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Is<Vector3int16>
 
