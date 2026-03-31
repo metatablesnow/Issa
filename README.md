@@ -7,10 +7,17 @@
 
 ---
 
+> [!CAUTION]
+> Issa is in beta, expect bugs and for the API to change!
+
 ### Features
 - Types from runtime checks
 - Pretty yet precise errors
 - Small, composable predicates
+
+### Installation
+
+Issa is not published to Wally or Pesde currently. Simply copy the [source code](https://github.com/metatablesnow/Issa/blob/main/src/init.luau) into a module.
 
 ### Guide
 
