@@ -1,6 +1,4 @@
 --!strict
-local INDENT = "    "
-
 export type Range = { number } | {min: number, max: number}
 
 type PathSegment =
@@ -24,21 +22,42 @@ type Rendered = {
 	highlightEnd: number?,
 }
 
-export type Predicate<T> = typeof(setmetatable(
-	{} :: {
-		kind: string,
-		_check: (self: any, input: unknown) -> Result,
-		Try: (self: Predicate<T>, input: unknown) -> (boolean, string | T),
-		Type: (self: Predicate<T>) -> T,
-	},
-	{} :: {
-		__call: (self: Predicate<T>, input: unknown) -> T,
-	}
-))
-
-local function pass(): Result
-	return { ok = true, error = {} }
+--selene: allow(undefined_variable)
+type function getType(a)
+	return a:readproperty(types.singleton("Type")):returns().head[1]
 end
+
+--selene: allow(undefined_variable)
+type function IntersectionType(a, b, c, d, e, f)
+	if f ~= nil then
+		return types.intersectionof(a, b, c, d, e, f)
+	elseif e ~= nil then
+		return types.intersectionof(a, b, c, d, e)
+	elseif d ~= nil then
+		return types.intersectionof(a, b, c, d)
+	elseif c ~= nil then
+		return types.intersectionof(a, b, c)
+	else
+		return types.intersectionof(a, b)
+	end
+end
+
+--selene: allow(undefined_variable)
+type function Union(a, b, c, d, e, f)
+	if f ~= nil then
+		return types.unionof(a, b, c, d, e, f)
+	elseif e ~= nil then
+		return types.unionof(a, b, c, d, e)
+	elseif d ~= nil then
+		return types.unionof(a, b, c, d)
+	elseif c ~= nil then
+		return types.unionof(a, b, c)
+	else
+		return types.unionof(a, b)
+	end
+end
+
+local INDENT = "    "
 
 local function copyPath(path: { PathSegment }?, segment: PathSegment?, insertAtStart: boolean?): { PathSegment }
 	local newPath = {}
@@ -58,18 +77,6 @@ local function copyPath(path: { PathSegment }?, segment: PathSegment?, insertAtS
 	end
 
 	return newPath
-end
-
-local function fail(expected: string, input: unknown, message: string?, path: { PathSegment }?): Result
-	return {
-		ok = false,
-		error = {
-			expected = expected or "valid value",
-			input = input,
-			message = message,
-			path = copyPath(path),
-		},
-	}
 end
 
 local function failFromChild(err: ErrorInfo, segment: PathSegment): Result
@@ -152,14 +159,6 @@ local function pathMatches(a: { PathSegment }?, b: { PathSegment }?, prefix: boo
 	return true
 end
 
-local function pathsEqual(a: { PathSegment }?, b: { PathSegment }?): boolean
-	return pathMatches(a, b, false)
-end
-
-local function isPathPrefix(prefix: { PathSegment }?, full: { PathSegment }?): boolean
-	return pathMatches(prefix, full, true)
-end
-
 local function renderLeaf(text: string, highlight: boolean): Rendered
 	return {
 		lines = { text },
@@ -215,13 +214,13 @@ local function renderValueDeep(
 	depth: number
 ): Rendered
 	if typeof(value) ~= "table" then
-		return renderLeaf(displayInlineValue(value, 200), pathsEqual(currentPath, err.path))
+		return renderLeaf(displayInlineValue(value, 200), pathMatches(currentPath, err.path, false))
 	end
 
 	if typeof(value) == "table" 
-	and pathsEqual(currentPath, err.path) 
+	and pathMatches(currentPath, err.path, false) 
 	and not expectedLooksTableLike(err.expected) 
-	or (pathsEqual(currentPath, err.path) and shouldCollapseWholeTable(err)) then
+	or (pathMatches(currentPath, err.path, false) and shouldCollapseWholeTable(err)) then
 		return renderLeaf("{...}", true)
 	end
 
@@ -262,9 +261,9 @@ local function renderValueDeep(
 	if #keys == 0 then
 		return {
 			lines = { "{}" },
-			highlightLine = if pathsEqual(currentPath, err.path) then 1 else nil,
-			highlightStart = if pathsEqual(currentPath, err.path) then 1 else nil,
-			highlightEnd = if pathsEqual(currentPath, err.path) then 2 else nil,
+			highlightLine = if pathMatches(currentPath, err.path, false) then 1 else nil,
+			highlightStart = if pathMatches(currentPath, err.path, false) then 1 else nil,
+			highlightEnd = if pathMatches(currentPath, err.path, false) then 2 else nil,
 		}
 	end
 
@@ -289,7 +288,7 @@ local function renderValueDeep(
 			{ kind = "key", key = key }
 
 		local childPath = copyPath(currentPath, segment)
-		local shouldExpand = isPathPrefix(childPath, err.path) or isPathPrefix(err.path, childPath)
+		local shouldExpand = pathMatches(childPath, err.path, true) or pathMatches(err.path, childPath, true)
 
 		if not shouldExpand then
 			hiddenCount += 1
@@ -341,12 +340,12 @@ local function renderValueDeep(
 	end
 
 	if hiddenCount > 0 then
-		table.insert(lines, "    ...")
+		table.insert(lines, INDENT.."...")
 	end
 
 	table.insert(lines, "}")
 
-	if pathsEqual(currentPath, err.path) and output.highlightLine == nil then
+	if pathMatches(currentPath, err.path, false) and output.highlightLine == nil then
 		output.highlightLine = 1
 		output.highlightStart = 1
 		output.highlightEnd = 1
@@ -372,7 +371,7 @@ local function formatPrettyErr(rootInput: unknown, err: ErrorInfo): string
 
 	local errMessage
 	if err.message then
-		errMessage =  `{path}: expected {expected}, got {gotType} ({gotValue})\n  ↳ {err.message}`
+		errMessage = `{path}: expected {expected}, got {gotType} ({gotValue}): {err.message}`
 	else
 		errMessage = `{path}: expected {expected}, got {gotType} ({gotValue})`
 	end
@@ -403,22 +402,51 @@ local function formatPrettyErr(rootInput: unknown, err: ErrorInfo): string
 	return `\n\n{table.concat(pointers, "\n")}`
 end
 
-local Predicate = {}
-Predicate.__index = Predicate
+local Is = {}
+Is.__index = Is
 
-local function MakePredicate<T>(
+type IsMethods<T> = {
 	kind: string,
-	check: (self: Predicate<T>, input: unknown) -> Result
-): Predicate<T>
+	_check: (self: Is<T>, input: unknown) -> Result,
+	Type: (self: Is<T>) -> T,
+}
+
+type IsMetatable<T> = {
+	__index: IsMethods<T>,
+	__call: (self: Is<T>, input: unknown) -> T,
+}
+
+export type Is<T> = typeof(setmetatable(
+	{} :: IsMethods<T>,
+	{} :: IsMetatable<T>
+))
+
+local function pass(): Result
+	return { ok = true, error = {} }
+end
+
+local function fail(expected: string, input: unknown, message: string?, path: { PathSegment }?): Result
+	return {
+		ok = false,
+		error = {
+			expected = expected or "valid value",
+			input = input,
+			message = message,
+			path = copyPath(path),
+		},
+	}
+end
+
+function Is.new <T>(kind: string, check: (self: Is<T>, input: unknown) -> Result): Is<T>
 	return setmetatable({
 		kind = kind,
 		_check = check,
-	}, Predicate) :: any
+}, Is) :: Is<T>
 end
 
-local function MakeTypeof(typeName: string): () -> Predicate<any>
+local function TypeOf(typeName: string): () -> Is<any>
 	return function()
-		return MakePredicate(typeName, function(self, input)
+		return Is.new(typeName, function(self, input)
 			if typeof(input) ~= typeName then
 				return fail(self.kind, input)
 			end
@@ -428,7 +456,7 @@ local function MakeTypeof(typeName: string): () -> Predicate<any>
 	end
 end
 
-function Predicate.__call<T>(self: Predicate<T>, input: unknown): T
+function Is.__call<T>(self: Is<any>, input: T): T
 	local result = (self :: any):_check(input) :: Result
 	if result.ok then
 		return input :: any
@@ -437,7 +465,7 @@ function Predicate.__call<T>(self: Predicate<T>, input: unknown): T
 	error(formatPrettyErr(input, result.error))
 end
 
-function Predicate.Try<T>(self: Predicate<T>, input: unknown): (boolean, T | string)
+function Is.Try<T>(self: Is<T>, input: unknown): (boolean, T | string)
 	local result = (self :: any):_check(input) :: Result
 	if result.ok then
 		return true, input :: any
@@ -446,33 +474,32 @@ function Predicate.Try<T>(self: Predicate<T>, input: unknown): (boolean, T | str
 	return false, formatPrettyErr(input, result.error)
 end
 
-function Predicate.Type<T>(_self: Predicate<T>): T
+function Is.Type<T>(_self: Is<T>): T
 	return (nil :: any) :: T
 end
 
-local Is = {}
-function Is.Predicate<T>(): Predicate<Predicate<T>>
-	return MakePredicate("predicate", function(self, input: unknown): Result
+function Is.Predicate<T>(): Is<Is<T>>
+	return Is.new("predicate", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
 			return fail(self.kind, input)
 		end
 
-		if getmetatable(input) ~= Predicate then
+		if getmetatable(input) ~= Is then
 			return fail(self.kind, input)
 		end
 
 		return pass()
-	end) :: Predicate<Predicate<T>>
+	end) :: Is<Is<T>>
 end
 
-function Is.Any(): Predicate<any>
-	return MakePredicate("any", function(): Result
+function Is.Any(): Is<any>
+	return Is.new("any", function(): Result
 		return pass()
-	end) :: Predicate<any>
+	end) :: Is<any>
 end
 
-function Is.Literal<T>(value: T): Predicate<T>
-	return MakePredicate("literal", function(self, input: unknown): Result
+function Is.Literal<T>(value: T): Is<T>
+	return Is.new("literal", function(self, input: unknown): Result
 		if input ~= value then
 			return fail(self.kind, input, `expected "{value}" got "{input}"`)
 		end
@@ -483,8 +510,8 @@ end
 
 Is.Exact = Is.Literal
 
-function Is.Not<T>(predicate: Predicate<T>): Predicate<unknown>
-	return MakePredicate("not", function(self, input: unknown): Result
+function Is.Not<T>(predicate: Is<T>): Is<unknown>
+	return Is.new("not", function(self, input: unknown): Result
 		if predicate:_check(input).ok then
 			return fail(self.kind, input, `expected not "{predicate.kind}" got "{input}"`)
 		end
@@ -493,8 +520,8 @@ function Is.Not<T>(predicate: Predicate<T>): Predicate<unknown>
 	end)
 end
 
-function Is.Optional<T>(predicate: Predicate<T>): Predicate<T?>
-	return MakePredicate("optional", function(_self, input: unknown): Result
+function Is.Optional<T>(predicate: Is<T>): Is<T?>
+	return Is.new("optional", function(_self, input: unknown): Result
 		if input == nil then
 			return pass()
 		end
@@ -507,17 +534,18 @@ end
 	Primitive Types
 ]]
 	
-Is.Nil = MakeTypeof("nil") :: () -> Predicate<nil>
-Is.Boolean = MakeTypeof("boolean") :: () -> Predicate<boolean>
-Is.String = MakeTypeof("string") :: () -> Predicate<string>
-Is.Thread = MakeTypeof("thread") :: () -> Predicate<thread>
-Is.Function = MakeTypeof("function") :: () -> Predicate<(...any) -> (...any)>
-Is.Table = MakeTypeof("table") :: () -> Predicate<{ [any]: any }>
-Is.Buffer = MakeTypeof("buffer") :: () -> Predicate<buffer>
-Is.Unknown = MakeTypeof("unknown") :: () -> Predicate<unknown>
+Is.Nil = TypeOf("nil") :: () -> Is<nil>
+Is.Boolean = TypeOf("boolean") :: () -> Is<boolean>
+Is.String = TypeOf("string") :: () -> Is<string>
+Is.Thread = TypeOf("thread") :: () -> Is<thread>
+Is.Function = TypeOf("function") :: () -> Is<(...any) -> (...any)>
+Is.Table = TypeOf("table") :: () -> Is<{ [any]: any }>
+Is.Buffer = TypeOf("buffer") :: () -> Is<buffer>
+Is.Unknown = TypeOf("unknown") :: () -> Is<unknown>
+Is.UserData = TypeOf("userdata") :: () -> Is<unknown>
 
 function Is.Never()
-	return MakePredicate("never", function()
+	return Is.new("never", function()
 		error("value is never allowed")
 	end)
 end
@@ -525,8 +553,8 @@ end
 function Is.Number(limits: {
 	range: Range?,
 	integer: boolean?,
-}?): Predicate<number>
-	return MakePredicate("number", function(self, input: unknown): Result
+}?): Is<number>
+	return Is.new("number", function(self, input: unknown): Result
 		if typeof(input) ~= "number" then
 			return fail(self.kind, input)
 		end
@@ -540,15 +568,15 @@ function Is.Number(limits: {
 		end
 
 		return pass()
-	end) :: Predicate<number>
+	end) :: Is<number>
 end
 
 --[[
 	Structural / Complex Types
 ]]
 	
-function Is.Map<K, V>(expectedKey: Predicate<K>, expectedValue: Predicate<V>): Predicate<{ [K]: V }>
-	return MakePredicate("list", function(self, input: unknown): Result
+function Is.Map<K, V>(expectedKey: Is<K>, expectedValue: Is<V>): Is<{ [K]: V }>
+	return Is.new("list", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
 			return fail(self.kind, input, "input is not a table")
 		end
@@ -568,15 +596,15 @@ function Is.Map<K, V>(expectedKey: Predicate<K>, expectedValue: Predicate<V>): P
 		end
 
 		return pass()
-	end) :: Predicate<{ [K]: V }>
+	end) :: Is<{ [K]: V }>
 end
 
-function Is.Set<T>(key: Predicate<T>): Predicate<{[T]: true}>
-	return Is.Map(key, Is.Literal(true)) :: Predicate<{[T]: true}>
+function Is.Set<T>(key: Is<T>): Is<{ [T]: true }>
+	return Is.Map(key, Is.Literal(true)) :: Is<{ [T]: true }>
 end
 
-function Is.Array<T>(predicate: Predicate<T>?): Predicate<{ [number]: T }>
-	return MakePredicate("array", function(self, input: unknown): Result
+function Is.Array<T>(predicate: Is<T>?): Is<{ [number]: T }>
+	return Is.new("array", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
 			return fail(self.kind, input, "input is not a table")
 		end
@@ -597,7 +625,7 @@ function Is.Array<T>(predicate: Predicate<T>?): Predicate<{ [number]: T }>
 			end
 
 			if predicate then
-				local result = (predicate :: Predicate<any>):_check(value)
+				local result = (predicate :: Is<any>):_check(value)
 				if not result.ok then
 					return failFromChild(result.error, { kind = "index", key = key })
 				end
@@ -605,7 +633,7 @@ function Is.Array<T>(predicate: Predicate<T>?): Predicate<{ [number]: T }>
 		end
 
 		return pass()
-	end) :: Predicate<{ [number]: T }>
+	end) :: Is<{ [number]: T }>
 end
 
 --selene: allow(undefined_variable)
@@ -619,8 +647,8 @@ type function Interface(shape)
 	return out
 end
 
-function Is.Interface<S>(shape: S, strict: boolean?): Predicate<Interface<S>>
-	return MakePredicate("interface", function(self, input: unknown): Result
+function Is.Interface<S>(shape: S, strict: boolean?): Is<Interface<S>>
+	return Is.new("interface", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
 			return fail(self.kind, input, "input is not a table")
 		end
@@ -641,70 +669,51 @@ function Is.Interface<S>(shape: S, strict: boolean?): Predicate<Interface<S>>
 			end
 		end
 
-		for key, predicate in (shape :: { [string]: Predicate<any>? }) do
-			local result = (predicate :: Predicate<any>):_check(tbl[key])
+		for key, predicate in (shape :: { [string]: Is<any>? }) do
+			local result = (predicate :: Is<any>):_check(tbl[key])
 			if not result.ok then
 				return failFromChild(result.error, { kind = "field", key = key })
 			end
 		end
 
 		return pass()
-	end) :: Predicate<Interface<S>>
+	end) :: Is<Interface<S>>
 end
 
 --[[
 	Combination Types
 ]]
 
---selene: allow(undefined_variable)
-type function getType(a)
-	return a:readproperty(types.singleton("Type")):returns().head[1]
-end
+local intersection = function(...)
+	local predicates: { Is<any> } = { ... }
 
---selene: allow(undefined_variable)
-type function Intersection(a, b, c, d, e, f)
-	local aType = getType(a)
-	local bType = getType(b)
-
-	if f and f:is("table") then
-		return types.intersectionof(aType, bType, getType(c), getType(d), getType(e), getType(f))
-	elseif e and e:is("table") then
-		return types.intersectionof(aType, bType, getType(c), getType(d), getType(e))
-	elseif d and d:is("table") then
-		return types.intersectionof(aType, bType, getType(c), getType(d))
-	elseif c and c:is("table") then
-		return types.intersectionof(aType, bType, getType(c))
-	else
-		return types.intersectionof(aType, bType)
-	end
-end
-
-function Is.Intersection<A, B, C, D, E, F>(a: A, b: B, c: C?, d: D?, e: E?, f: F?): Predicate<Intersection<A, B, C, D, E, F>>
-	local predicates = { a, b, c, d, e, f }
-
-	return MakePredicate("intersection", function(_self, input: unknown): Result
+	return Is.new("intersection", function(_self, input: unknown): Result
 		for _, predicate in predicates do
-			local result = (predicate :: Predicate<A | B>):_check(input)
-			if not result.ok then
-				return result
+			if predicate ~= nil then
+				local result = predicate:_check(input)
+				if not result.ok then
+					return result
+				end
 			end
 		end
 
 		return pass()
-	end) :: Predicate<Intersection<A, B, C, D, E, F>>
+	end) :: any
 end
 
-type UnionType =
-	(<A, B>(a: Predicate<A>, b: Predicate<B>) -> Predicate<A | B>) &
-	(<A, B, C>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>) -> Predicate<A | B | C>) &
-	(<A, B, C, D>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>, d: Predicate<D>) -> Predicate<A | B | C | D>) &
-	(<A, B, C, D, E>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>, d: Predicate<D>, e: Predicate<E>) -> Predicate<A | B | C | D | E>) &
-	(<A, B, C, D, E, F>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>, d: Predicate<D>, e: Predicate<E>, f: Predicate<F>) -> Predicate<A | B | C | D | E | F>)
+Is.Intersection = intersection :: <A, B, C, D, E, F>(
+	a: Is<A>,
+	b: Is<B>,
+	c: Is<C>?,
+	d: Is<D>?,
+	e: Is<E>?,
+	f: Is<F>?
+) -> Is<IntersectionType<A, B, C, D, E, F>>
 
 local union = (function(...)
-	local predicates: { Predicate<any> } = { ... }
+	local predicates: { Is<any> } = { ... }
 
-	return MakePredicate("union", function(self, input: unknown): Result
+	return Is.new("union", function(self, input: unknown): Result
 		for _, predicate in predicates do
 			if predicate:_check(input).ok then
 				return pass()
@@ -713,13 +722,13 @@ local union = (function(...)
 
 		return fail(self.kind, input, "input did not match any union member")
 	end)
-end) :: UnionType
+end) :: <A, B, C, D, E, F>(a: Is<A>, b: Is<B>, c: Is<C>?, d: Is<D>?, e: Is<E>?, f: Is<F>?) -> Is<Union<A, B, C, D, E, F>>
 
 Is.Union = union
 Is.Or = union
 
-function Is.Instance(className: string?): Predicate<Instance>
-	return MakePredicate(className and `Instance<{className}>` or "Instance", function(self, input: unknown): Result
+function Is.Instance(className: string?): Is<Instance>
+	return Is.new(className and `Instance<{className}>` or "Instance", function(self, input: unknown): Result
 		if typeof(input) ~= "Instance" then
 			return fail(self.kind, input)
 		end
@@ -729,55 +738,55 @@ function Is.Instance(className: string?): Predicate<Instance>
 		end
 
 		return pass()
-	end) :: Predicate<Instance>
+	end) :: Is<Instance>
 end
 
 --[[
 	Roblox Types
 ]]
 
-Is.Axes = MakeTypeof("Axes") :: () -> Predicate<Axes>
-Is.BrickColor = MakeTypeof("BrickColor") :: () -> Predicate<BrickColor>
-Is.CatalogSearchParams = MakeTypeof("CatalogSearchParams") :: () -> Predicate<CatalogSearchParams>
-Is.CFrame = MakeTypeof("CFrame") :: () -> Predicate<CFrame>
-Is.Color3 = MakeTypeof("Color3") :: () -> Predicate<Color3>
-Is.ColorSequence = MakeTypeof("ColorSequence") :: () -> Predicate<ColorSequence>
-Is.ColorSequenceKeypoint = MakeTypeof("ColorSequenceKeypoint") :: () -> Predicate<ColorSequenceKeypoint>
-Is.Content = MakeTypeof("Content") :: () -> Predicate<Content>
-Is.DateTime = MakeTypeof("DateTime") :: () -> Predicate<DateTime>
-Is.DockWidgetPluginGuiInfo = MakeTypeof("DockWidgetPluginGuiInfo") :: () -> Predicate<DockWidgetPluginGuiInfo>
-Is.Enum = MakeTypeof("Enum") :: () -> Predicate<Enum>
-Is.EnumItem = MakeTypeof("EnumItem") :: () -> Predicate<EnumItem>
-Is.Faces = MakeTypeof("Faces") :: () -> Predicate<Faces>
-Is.FloatCurveKey = MakeTypeof("FloatCurveKey") :: () -> Predicate<FloatCurveKey>
-Is.Font = MakeTypeof("Font") :: () -> Predicate<Font>
-Is.NumberRange = MakeTypeof("NumberRange") :: () -> Predicate<NumberRange>
-Is.NumberSequence = MakeTypeof("NumberSequence") :: () -> Predicate<NumberSequence>
-Is.NumberSequenceKeypoint = MakeTypeof("NumberSequenceKeypoint") :: () -> Predicate<NumberSequenceKeypoint>
-Is.OverlapParams = MakeTypeof("OverlapParams") :: () -> Predicate<OverlapParams>
-Is.Path2DControlPoint = MakeTypeof("Path2DControlPoint") :: () -> Predicate<Path2DControlPoint>
-Is.PathWaypoint = MakeTypeof("PathWaypoint") :: () -> Predicate<PathWaypoint>
-Is.PhysicalProperties = MakeTypeof("PhysicalProperties") :: () -> Predicate<PhysicalProperties>
-Is.Random = MakeTypeof("Random") :: () -> Predicate<Random>
-Is.Ray = MakeTypeof("Ray") :: () -> Predicate<Ray>
-Is.RaycastParams = MakeTypeof("RaycastParams") :: () -> Predicate<RaycastParams>
-Is.RaycastResult = MakeTypeof("RaycastResult") :: () -> Predicate<RaycastResult>
-Is.RBXScriptConnection = MakeTypeof("RBXScriptConnection") :: () -> Predicate<RBXScriptConnection>
-Is.RBXScriptSignal = MakeTypeof("RBXScriptSignal") :: () -> Predicate<RBXScriptSignal>
-Is.Rect = MakeTypeof("Rect") :: () -> Predicate<Rect>
-Is.Region3 = MakeTypeof("Region3") :: () -> Predicate<Region3>
-Is.Region3int16 = MakeTypeof("Region3int16") :: () -> Predicate<Region3int16>
-Is.RotationCurveKey = MakeTypeof("RotationCurveKey") :: () -> Predicate<RotationCurveKey>
-Is.Secret = MakeTypeof("Secret") :: () -> Predicate<Secret>
-Is.SecurityCapabilities = MakeTypeof("SecurityCapabilities") :: () -> Predicate<SecurityCapabilities>
-Is.SharedTable = MakeTypeof("SharedTable") :: () -> Predicate<SharedTable>
-Is.TweenInfo = MakeTypeof("TweenInfo") :: () -> Predicate<TweenInfo>
-Is.UDim = MakeTypeof("UDim") :: () -> Predicate<UDim>
-Is.UDim2 = MakeTypeof("UDim2") :: () -> Predicate<UDim2>
-Is.ValueCurveKey = MakeTypeof("ValueCurveKey") :: () -> Predicate<ValueCurveKey>
-Is.Vector2 = MakeTypeof("Vector2") :: () -> Predicate<Vector2>
-Is.Vector2int16 = MakeTypeof("Vector2int16") :: () -> Predicate<Vector2int16>
-Is.Vector3 = MakeTypeof("Vector3") :: () -> Predicate<Vector3>
-Is.Vector3int16 = MakeTypeof("Vector3int16") :: () -> Predicate<Vector3int16>
+Is.Axes = TypeOf("Axes") :: () -> Is<Axes>
+Is.BrickColor = TypeOf("BrickColor") :: () -> Is<BrickColor>
+Is.CatalogSearchParams = TypeOf("CatalogSearchParams") :: () -> Is<CatalogSearchParams>
+Is.CFrame = TypeOf("CFrame") :: () -> Is<CFrame>
+Is.Color3 = TypeOf("Color3") :: () -> Is<Color3>
+Is.ColorSequence = TypeOf("ColorSequence") :: () -> Is<ColorSequence>
+Is.ColorSequenceKeypoint = TypeOf("ColorSequenceKeypoint") :: () -> Is<ColorSequenceKeypoint>
+Is.Content = TypeOf("Content") :: () -> Is<Content>
+Is.DateTime = TypeOf("DateTime") :: () -> Is<DateTime>
+Is.DockWidgetPluginGuiInfo = TypeOf("DockWidgetPluginGuiInfo") :: () -> Is<DockWidgetPluginGuiInfo>
+Is.Enum = TypeOf("Enum") :: () -> Is<Enum>
+Is.EnumItem = TypeOf("EnumItem") :: () -> Is<EnumItem>
+Is.Faces = TypeOf("Faces") :: () -> Is<Faces>
+Is.FloatCurveKey = TypeOf("FloatCurveKey") :: () -> Is<FloatCurveKey>
+Is.Font = TypeOf("Font") :: () -> Is<Font>
+Is.NumberRange = TypeOf("NumberRange") :: () -> Is<NumberRange>
+Is.NumberSequence = TypeOf("NumberSequence") :: () -> Is<NumberSequence>
+Is.NumberSequenceKeypoint = TypeOf("NumberSequenceKeypoint") :: () -> Is<NumberSequenceKeypoint>
+Is.OverlapParams = TypeOf("OverlapParams") :: () -> Is<OverlapParams>
+Is.Path2DControlPoint = TypeOf("Path2DControlPoint") :: () -> Is<Path2DControlPoint>
+Is.PathWaypoint = TypeOf("PathWaypoint") :: () -> Is<PathWaypoint>
+Is.PhysicalProperties = TypeOf("PhysicalProperties") :: () -> Is<PhysicalProperties>
+Is.Random = TypeOf("Random") :: () -> Is<Random>
+Is.Ray = TypeOf("Ray") :: () -> Is<Ray>
+Is.RaycastParams = TypeOf("RaycastParams") :: () -> Is<RaycastParams>
+Is.RaycastResult = TypeOf("RaycastResult") :: () -> Is<RaycastResult>
+Is.RBXScriptConnection = TypeOf("RBXScriptConnection") :: () -> Is<RBXScriptConnection>
+Is.RBXScriptSignal = TypeOf("RBXScriptSignal") :: () -> Is<RBXScriptSignal>
+Is.Rect = TypeOf("Rect") :: () -> Is<Rect>
+Is.Region3 = TypeOf("Region3") :: () -> Is<Region3>
+Is.Region3int16 = TypeOf("Region3int16") :: () -> Is<Region3int16>
+Is.RotationCurveKey = TypeOf("RotationCurveKey") :: () -> Is<RotationCurveKey>
+Is.Secret = TypeOf("Secret") :: () -> Is<Secret>
+Is.SecurityCapabilities = TypeOf("SecurityCapabilities") :: () -> Is<SecurityCapabilities>
+Is.SharedTable = TypeOf("SharedTable") :: () -> Is<SharedTable>
+Is.TweenInfo = TypeOf("TweenInfo") :: () -> Is<TweenInfo>
+Is.UDim = TypeOf("UDim") :: () -> Is<UDim>
+Is.UDim2 = TypeOf("UDim2") :: () -> Is<UDim2>
+Is.ValueCurveKey = TypeOf("ValueCurveKey") :: () -> Is<ValueCurveKey>
+Is.Vector2 = TypeOf("Vector2") :: () -> Is<Vector2>
+Is.Vector2int16 = TypeOf("Vector2int16") :: () -> Is<Vector2int16>
+Is.Vector3 = TypeOf("Vector3") :: () -> Is<Vector3>
+Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Is<Vector3int16>
 
 return Is
