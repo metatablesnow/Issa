@@ -5,4 +5,11 @@
 /*.rbxlx.lock
 /*.rbxl.lock
 
+.pesde/
+luau_packages/
+lune_packages/
+
+pesde.lock
+aftman.toml
+selene.toml
 sourcemap.json
