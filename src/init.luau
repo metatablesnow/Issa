@@ -390,26 +390,11 @@ end
 local Is = {}
 Is.__index = Is
 
-type IsMethods<T> = {
-	kind: string,
-	_predicate: (self: Is<T>, input: unknown) -> Result,
-	Refine: (
-		self: Is<T>,
-		refinement: (
-			fail: (message: string) -> Result,
-			pass: () -> Result,
-			input: T
-		) -> Result
-	) -> Is<T>,
-}
-
-type IsMetatable<T> = {
-	__index: IsMethods<T>,
-	__call: (self: Is<T>, input: unknown) -> T,
-}
-
 export type Is<T> = typeof(setmetatable(
-	{} :: IsMethods<T>,
+	{} :: {
+		kind: string,
+		_predicate: (self: Is<T>, input: unknown) -> Result
+	},
 	{} :: typeof(Is)
 ))
 
@@ -721,11 +706,20 @@ Is.StrictStructure = Is.StrictInterface
 local intersection = function(...)
 	local predicates: { Is<any> } = { ... }
 
-	return Is.new("intersection", function(_self, input: unknown): Result
+	local kinds = {}
+	for _, predicate in predicates do
+		table.insert(kinds, predicate.kind)
+	end
+
+	local kind = table.concat(kinds, " & ")
+
+	return Is.new(kind, function(_self, input: unknown): Result
 		for _, predicate in predicates do
 			if predicate ~= nil then
 				local result = predicate:_predicate(input)
 				if not result.ok then
+					result.error.expected = kind
+
 					return result
 				end
 			end
@@ -746,15 +740,22 @@ Is.Intersection = intersection :: <A, B, C, D, E, F>(
 
 local union = (function(...)
 	local predicates: { Is<any> } = { ... }
+	
+	local kinds = {}
+	for _, predicate in predicates do
+		table.insert(kinds, predicate.kind)
+	end
 
-	return Is.new("union", function(self, input: unknown): Result
+	local kind = table.concat(kinds, " | ")
+
+	return Is.new(kind, function(self, input: unknown): Result
 		for _, predicate in predicates do
 			if predicate:_predicate(input).ok then
 				return pass()
 			end
 		end
 
-		return fail(self.kind, input, "input did not match any union member")
+		return fail(self.kind, input)
 	end)
 end) :: <A, B, C, D, E, F>(a: Is<A>, b: Is<B>, c: Is<C>?, d: Is<D>?, e: Is<E>?, f: Is<F>?) -> Is<Union<A, B, C, D, E, F>>
 

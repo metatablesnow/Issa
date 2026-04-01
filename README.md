@@ -1,5 +1,5 @@
 <div align="center">
-<img src="./gh-assets/issa.svg" width="50%">
+<img src="./gh-assets/issa.svg" width="75%">
 <br>
 <br>
 	A runtime type validator with pretty errors and real types
