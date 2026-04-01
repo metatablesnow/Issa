@@ -3,9 +3,41 @@
 <br>
 <br>
 	A runtime type validator with pretty errors and real types
+
+    [Github](https://github.com/metatablesnow/Issa) • [Wally Page](https://wally.run/package/metatablesnow/issa?version=0.1.0) • [Pesde Page](https://pesde.dev/packages/metatablesnow/issa/0.1.0/any)
 </div>
 
 ---
+
+<br>
+
+>[!IMPORTANT]
+>Issa is in beta, expect bugs and API changes!
+
+### Features
+- Types from runtime checks
+- Pretty yet precise errors
+- Small, composable predicates
+
+### Installation
+
+#### Wally
+Add Issa to your `wally.toml` dependencies list:
+```toml
+[dependencies]
+Is = "metatablesnow/issa@0.1.0"
+```
+
+#### Pesde
+Add Issa to your `pesde.toml` dependencies list:
+```toml
+[dependencies]
+Is = { name = "metatablesnow/issa", version = "0.1.0" }
+```
+
+#### Manual
+Copy and paste the [source code](https://github.com/metatablesnow/Issa/blob/main/src/init.luau) into a module script.
+
 
 > [!CAUTION]
 > Issa is in beta, expect bugs and for the API to change!
