@@ -3,7 +3,7 @@ name = "metatablesnow/issa"
 description = "A runtime type validator with pretty errors and real types"
 license = "MIT"
 authors = ["metatablesnow"]
-version = "0.1.0-dev1"
+version = "0.1.0"
 
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
