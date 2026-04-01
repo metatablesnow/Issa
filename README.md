@@ -2,9 +2,11 @@
 <img src="./gh-assets/issa.svg" width="75%">
 <br>
 <br>
-	A runtime type validator with pretty errors and real types
+A runtime type validator with pretty errors and real types
+<br>
+<br>
 
-    [Github](https://github.com/metatablesnow/Issa) • [Wally Page](https://wally.run/package/metatablesnow/issa?version=0.1.0) • [Pesde Page](https://pesde.dev/packages/metatablesnow/issa/0.1.0/any)
+[Github](https://github.com/metatablesnow/Issa) · [Wally Page](https://wally.run/package/metatablesnow/issa?version=0.1.0) · [Pesde Page](https://pesde.dev/packages/metatablesnow/issa/0.1.0/any)
 </div>
 
 ---
