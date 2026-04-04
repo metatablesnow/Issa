@@ -1,632 +1,46 @@
 --!strict
-type PathSegment =
-	{ kind: "field", key: string }
-| { kind: "index", key: number }
-| { kind: "key", key: unknown }
 
-type ErrorInfo = {
-	expected: string?,
-	input: unknown?,
-	message: string?,
-	path: { PathSegment }?,
+export type Error = {
+	Input: unknown,
+	Expected: string,
+	Message: string?,
+	Path: { [any]: any }?,
+	Key: any?,
+	BecauseOf: "key" | "field"?,
 }
 
-type Result = { ok: boolean, error: ErrorInfo }
-
-type Rendered = {
-	lines: { string },
-	highlightLine: number?,
-	highlightStart: number?,
-	highlightEnd: number?,
-}
+export type Result = { Ok: boolean, Error: Error }
 
 --selene: allow(undefined_variable)
 type function getType(a)
-	return a:readproperty(types.singleton("Type")):returns().head[1]
+	return a:readproperty(types.singleton("Type"))
 end
 
 --selene: allow(undefined_variable)
-type function IntersectionType(a, b, c, d, e, f)
-	if f ~= nil then
+export type function Map(key, value)
+	local map = types.newtable()
+	map:setindexer(getType(key), getType(value))
+
+	return map
+end
+
+--selene: allow(undefined_variable)
+export type function Intersection(a, b, c, d, e, f)
+	if f.tag ~= "unknown" then
 		return types.intersectionof(a, b, c, d, e, f)
-	elseif e ~= nil then
+	elseif e.tag ~= "unknown" then
 		return types.intersectionof(a, b, c, d, e)
-	elseif d ~= nil then
+	elseif d.tag ~= "unknown" then
 		return types.intersectionof(a, b, c, d)
-	elseif c ~= nil then
+	elseif c.tag ~= "unknown" then
 		return types.intersectionof(a, b, c)
 	else
-		return types.intersectionof(a, b)
+		return types.intersectionof(getType(a), getType(b))
 	end
 end
 
 --selene: allow(undefined_variable)
-type function Union(a, b, c, d, e, f)
-	if f ~= nil then
-		return types.unionof(a, b, c, d, e, f)
-	elseif e ~= nil then
-		return types.unionof(a, b, c, d, e)
-	elseif d ~= nil then
-		return types.unionof(a, b, c, d)
-	elseif c ~= nil then
-		return types.unionof(a, b, c)
-	else
-		return types.unionof(a, b)
-	end
-end
-
-local INDENT = "    "
-
-local function copyPath(path: { PathSegment }?, segment: PathSegment?, insertAtStart: boolean?): { PathSegment }
-	local newPath = {}
-
-	if path then
-		for i = 1, #path do
-			newPath[i] = path[i]
-		end
-	end
-
-	if segment then
-		if insertAtStart then
-			table.insert(newPath, 1, segment)
-		else
-			table.insert(newPath, segment)
-		end
-	end
-
-	return newPath
-end
-
-local function failFromChild(err: ErrorInfo, segment: PathSegment): Result
-	return {
-		ok = false,
-		error = {
-			expected = err.expected,
-			input = err.input,
-			message = err.message,
-			path = copyPath(err.path, segment, true),
-		}
-	}
-end
-
-local function truncate(str: string, maxLen: number): string
-	if #str <= maxLen then
-		return str
-	end
-
-	return if maxLen <= 3 then str:sub(1, maxLen) else str:sub(1, maxLen - 3) .. "..."
-end
-
-local function displayInlineValue(input: unknown, maxLen: number?): string
-	local limit = maxLen or 40
-	local valueType = typeof(input)
-
-	if valueType == "string" then
-		return truncate(string.format("%q", input :: string), limit)
-	elseif valueType == "Instance" then
-		local instance = input :: Instance
-		return truncate(`<{instance.ClassName} "{instance.Name}">`, limit)
-	elseif valueType == "table" then
-		return "{...}"
-	elseif input == nil then
-		return "nil"
-	else
-		return truncate(tostring(input), limit)
-	end
-end
-
-local function pathMatches(a: { PathSegment }?, b: { PathSegment }?, prefix: boolean): boolean
-	if a == nil and b == nil then
-		return true
-	end
-
-	if a == nil then
-		return prefix
-	end
-
-	if b == nil then
-		return #a == 0
-	end
-
-	if (not prefix and #a ~= #b) or (prefix and #a > #b) then
-		return false
-	end
-
-	for i = 1, #a do
-		local A = a[i]
-		local B = b[i]
-
-		if A.kind ~= B.kind or A.key ~= B.key then
-			return false
-		end
-	end
-
-	return true
-end
-
-local function renderLeaf(text: string, highlight: boolean): Rendered
-	return {
-		lines = { text },
-		highlightLine = if highlight then 1 else nil,
-		highlightStart = if highlight then 1 else nil,
-		highlightEnd = if highlight then #text else nil,
-	}
-end
-
-local function shiftRendered(rendered: Rendered, prefix: string): Rendered
-	local newLines = table.clone(rendered.lines)
-	newLines[1] = prefix .. newLines[1]
-
-	local startCol = rendered.highlightStart
-	local endCol = rendered.highlightEnd
-
-	if rendered.highlightLine == 1 then
-		if startCol then
-			startCol += #prefix
-		end
-		if endCol then
-			endCol += #prefix
-		end
-	end
-
-	return {
-		lines = newLines,
-		highlightLine = rendered.highlightLine,
-		highlightStart = startCol,
-		highlightEnd = endCol,
-	}
-end
-
-local function expectedLooksTableLike(expected: string?): boolean
-	if not expected then
-		return false
-	end
-
-	return expected == "table"
-		or expected == "interface"
-		or string.find(expected, "{", 1, true) ~= nil
-		or string.find(expected, "table", 1, true) ~= nil
-end
-
-local function shouldCollapseWholeTable(err: ErrorInfo): boolean
-	return typeof(err.input) == "table" and expectedLooksTableLike(err.expected)
-end
-
-local function renderValueDeep(
-	value: unknown,
-	err: ErrorInfo,
-	currentPath: { PathSegment }?,
-	depth: number
-): Rendered
-	if typeof(value) ~= "table" then
-		return renderLeaf(displayInlineValue(value, 200), pathMatches(currentPath, err.path, false))
-	end
-
-	if typeof(value) == "table" 
-	and pathMatches(currentPath, err.path, false) 
-	and not expectedLooksTableLike(err.expected) 
-	or (pathMatches(currentPath, err.path, false) and shouldCollapseWholeTable(err)) then
-		return renderLeaf("{...}", true)
-	end
-
-	local tbl = value :: { [any]: any }
-	local keys = {}
-
-	for key in tbl do
-		table.insert(keys, key)
-	end
-
-	table.sort(keys :: {any}, function(a, b)
-		local ta = typeof(a)
-		local tb = typeof(b)
-
-		if ta == tb then
-			if ta == "number" or ta == "string" then
-				return (a :: number) < (b :: number)
-			end
-			return tostring(a) < tostring(b)
-		end
-
-		if ta == "number" then
-			return true
-		end
-		if tb == "number" then
-			return false
-		end
-		if ta == "string" then
-			return true
-		end
-		if tb == "string" then
-			return false
-		end
-
-		return ta < tb
-	end)
-
-	if #keys == 0 then
-		return {
-			lines = { "{}" },
-			highlightLine = if pathMatches(currentPath, err.path, false) then 1 else nil,
-			highlightStart = if pathMatches(currentPath, err.path, false) then 1 else nil,
-			highlightEnd = if pathMatches(currentPath, err.path, false) then 2 else nil,
-		}
-	end
-
-	local lines = { "{" }
-	local output: Rendered = {
-		lines = lines,
-		highlightLine = nil,
-		highlightStart = nil,
-		highlightEnd = nil,
-	}
-
-	local hiddenCount = 0
-
-	for _, key in keys do
-		local childValue = tbl[key]
-		local segment: PathSegment =
-			if typeof(key) == "string" then
-			{ kind = "field", key = key }
-			elseif typeof(key) == "number" then
-			{ kind = "index", key = key }
-			else
-			{ kind = "key", key = key }
-
-		local childPath = copyPath(currentPath, segment)
-		local shouldExpand = pathMatches(childPath, err.path, true) or pathMatches(err.path, childPath, true)
-
-		if not shouldExpand then
-			hiddenCount += 1
-			continue
-		end
-
-		local keyText =
-			if segment.kind == "field" and typeof(key) == "string" and string.match(key :: string, "^[%a_][%w_]*$") then
-			(key :: string) .. " = "
-			else
-			"[" .. displayInlineValue(key, 60) .. "] = "
-
-		local rendered = shiftRendered(renderValueDeep(childValue, err, childPath, depth + 1), keyText)
-		local newLines = table.create(#rendered.lines)
-
-		for i, line in rendered.lines do
-			newLines[i] = INDENT .. line
-		end
-
-		local startCol = rendered.highlightStart
-		local endCol = rendered.highlightEnd
-
-		if rendered.highlightLine then
-			if startCol then
-				startCol += #INDENT
-			end
-			if endCol then
-				endCol += #INDENT
-			end
-		end
-
-		local childRendered = {
-			lines = newLines :: { string },
-			highlightLine = rendered.highlightLine,
-			highlightStart = startCol,
-			highlightEnd = endCol,
-		}
-
-		local startLine = #lines + 1
-		for _, line in childRendered.lines do
-			table.insert(lines :: {string | unknown}, line)
-		end
-
-		if childRendered.highlightLine then
-			output.highlightLine = startLine + childRendered.highlightLine - 1
-			output.highlightStart = childRendered.highlightStart
-			output.highlightEnd = childRendered.highlightEnd
-		end
-	end
-
-	if hiddenCount > 0 then
-		table.insert(lines, INDENT.."...")
-	end
-
-	table.insert(lines, "}")
-
-	if pathMatches(currentPath, err.path, false) and output.highlightLine == nil then
-		output.highlightLine = 1
-		output.highlightStart = 1
-		output.highlightEnd = 1
-	end
-
-	return output
-end
-
-local function formatPrettyErr(rootInput: unknown, err: ErrorInfo): string
-	local path = "input"
-
-	for _, segment in err.path or {} do
-		if segment.kind == "field" then
-			path ..= "." .. segment.key
-		else
-			path ..= "[" .. tostring(segment.key) .. "]"
-		end
-	end
-
-	local expected = err.expected or "valid value"
-	local gotType = typeof(err.input)
-	local gotValue = displayInlineValue(err.input, 120)
-
-	local errMessage
-	if err.message then
-		errMessage = `{path}: expected {expected}, got {gotType} ({gotValue}): {err.message}`
-	else
-		errMessage = `{path}: expected {expected}, got {gotType} ({gotValue})`
-	end
-
-	if typeof(rootInput) ~= "table" then
-		return errMessage
-	end
-
-	if shouldCollapseWholeTable(err) and (not err.path or #err.path == 0) then
-		local token = "{...}"
-		return `{errMessage}\n\n{token}\n{string.rep("^", #token)}`
-	end
-
-	local rendered = renderValueDeep(rootInput, err, {}, 0)
-
-	if not rendered.highlightLine or not rendered.highlightStart or not rendered.highlightEnd then
-		return `{errMessage}\n\n{table.concat(rendered.lines, "\n")}`
-	end
-
-	local pointers = table.clone(rendered.lines)
-	table.insert(
-		pointers,
-		rendered.highlightLine + 1,
-		string.rep(" ", rendered.highlightStart - 1)
-			.. string.rep("^", math.max(1, rendered.highlightEnd - rendered.highlightStart + 1)).." "..errMessage
-	)
-
-	return `\n\n{table.concat(pointers, "\n")}`
-end
-
-local Is = {}
-Is.__index = Is
-
-export type Is<T> = typeof(setmetatable(
-	{} :: {
-		kind: string,
-		_predicate: (self: Is<T>, input: unknown) -> Result
-	},
-	{} :: typeof(Is)
-))
-
-local function pass(): Result
-	return { ok = true, error = {} }
-end
-
-local function fail(expected: string, input: unknown, message: string?, path: { PathSegment }?): Result
-	return {
-		ok = false,
-		error = {
-			expected = expected or "valid value",
-			input = input,
-			message = message,
-			path = copyPath(path),
-		},
-	}
-end
-
-function Is.new <T>(kind: string, check: (self: Is<T>, input: unknown) -> Result): Is<T>
-	return setmetatable({
-		kind = kind,
-		_predicate = check,
-}, Is) :: Is<T>
-end
-
-local function TypeOf(typeName: string): () -> Is<any>
-	return function()
-		return Is.new(typeName, function(self, input)
-			if typeof(input) ~= typeName then
-				return fail(self.kind, input)
-			end
-
-			return pass()
-		end)
-	end
-end
-
-function Is.__call<T>(self: Is<any>, input: T): T
-	local result = (self :: any):_predicate(input) :: Result
-	if result.ok then
-		return input :: any
-	end
-
-	error(formatPrettyErr(input, result.error))
-end
-
-function Is.Try<T>(self: Is<T>, input: unknown): (boolean, T | string)
-	local result = (self :: any):_predicate(input) :: Result
-	if result.ok then
-		return true, input :: any
-	end
-
-	return false, formatPrettyErr(input, result.error)
-end
-
-function Is.Type<T>(_self: Is<T>): T
-	return (nil :: any) :: T
-end
-
-function Is.Refine<T>(
-	predicate: Is<T>,
-	refinement: (
-		fail: (message: string) -> Result,
-		pass: () -> Result,
-		input: T
-	) -> Result
-): Is<T>
-	local predicateCheck = predicate._predicate
-
-	return Is.new(predicate.kind, function(self, input)
-		local predicateCheckResult: Result = predicateCheck(self, input)
-
-		if not predicateCheckResult.ok then
-			return predicateCheckResult
-		end
-
-		local refinementFail = function(message: string): Result
-			return fail(self.kind, input, message)
-		end
-
-		return refinement(refinementFail, pass, input :: T)
-	end)
-end
-function Is.Predicate<T>(): Is<Is<T>>
-	return Is.new("predicate", function(self, input: unknown): Result
-		if typeof(input) ~= "table" then
-			return fail(self.kind, input)
-		end
-
-		if getmetatable(input) ~= Is then
-			return fail(self.kind, input)
-		end
-
-		return pass()
-	end) :: Is<Is<T>>
-end
-
-function Is.Any(): Is<any>
-	return Is.new("any", function(): Result
-		return pass()
-	end) :: Is<any>
-end
-
-function Is.Literal<T>(value: T): Is<T>
-	return Is.new("literal", function(self, input: unknown): Result
-		if input ~= value then
-			return fail(self.kind, input, `expected "{value}" got "{input}"`)
-		end
-
-		return pass()
-	end)
-end
-
-Is.Exact = Is.Literal
-
-function Is.Not<T>(predicate: Is<T>): Is<unknown>
-	return Is.new("not", function(self, input: unknown): Result
-		if predicate:_predicate(input).ok then
-			return fail(self.kind, input, `expected not "{predicate.kind}" got "{input}"`)
-		end
-
-		return pass()
-	end)
-end
-
-function Is.Optional<T>(predicate: Is<T>): Is<T?>
-	return Is.new("optional", function(_self, input: unknown): Result
-		if input == nil then
-			return pass()
-		end
-
-		return (predicate :: any):_predicate(input)
-	end)
-end
-
---[[
-	Primitive Types
-]]
-	
-Is.Nil = TypeOf("nil") :: () -> Is<nil>
-Is.Boolean = TypeOf("boolean") :: () -> Is<boolean>
-Is.String = TypeOf("string") :: () -> Is<string>
-Is.Thread = TypeOf("thread") :: () -> Is<thread>
-Is.Function = TypeOf("function") :: () -> Is<(...any) -> (...any)>
-Is.Table = TypeOf("table") :: () -> Is<{ [any]: any }>
-Is.Buffer = TypeOf("buffer") :: () -> Is<buffer>
-Is.Unknown = TypeOf("unknown") :: () -> Is<unknown>
-Is.UserData = TypeOf("userdata") :: () -> Is<unknown>
-Is.Number = TypeOf("number") :: () -> Is<number>
-
-function Is.Never()
-	return Is.new("never", function()
-		error("value is never allowed")
-	end)
-end
-
---[[
-	Structural / Complex Types
-]]
-	
-function Is.Map<K, V>(expectedKey: Is<K>, expectedValue: Is<V>): Is<{ [K]: V }>
-	return Is.new("list", function(self, input: unknown): Result
-		if typeof(input) ~= "table" then
-			return fail(self.kind, input, "input is not a table")
-		end
-
-		local tbl = input :: { [any]: any }
-
-		for key, value in tbl do
-			local keyResult = expectedKey:_predicate(key)
-			if not keyResult.ok then
-				return failFromChild(keyResult.error, { kind = "key", key = key })
-			end
-
-			local valueResult = expectedValue:_predicate(value)
-			if not valueResult.ok then
-				return failFromChild(valueResult.error, { kind = "key", key = key })
-			end
-		end
-
-		return pass()
-	end) :: Is<{ [K]: V }>
-end
-
-function Is.Set<T>(key: Is<T>): Is<{ [T]: true }>
-	return Is.Map(key, Is.Literal(true)) :: Is<{ [T]: true }>
-end
-
-function Is.Keys<T>(predicate: Is<T>): Is<{[T]: any}>
-	return Is.Map(predicate, Is.Any())
-end
-
-function Is.Values<T>(predicate: Is<T>): Is<{[any]: T}>
-	return Is.Map(Is.Any(), predicate)
-end
-
-function Is.Array<T>(predicate: Is<T>?): Is<{ [number]: T }>
-	return Is.new("array", function(self, input: unknown): Result
-		if typeof(input) ~= "table" then
-			return fail(self.kind, input, "input is not a table")
-		end
-
-		local tbl = input :: { [any]: any }
-
-		for key, value in tbl do
-			if typeof(key) ~= "number" then
-				return fail("number", key, `non-number key "{tostring(key)}"`, {
-					{ kind = "key", key = key },
-				})
-			end
-
-			if key % 1 ~= 0 or key < 1 then
-				return fail("positive integer index", key, `invalid array index "{key}"`, {
-					{ kind = "key", key = key },
-				})
-			end
-
-			if predicate then
-				local result = (predicate :: Is<any>):_predicate(value)
-				if not result.ok then
-					return failFromChild(result.error, { kind = "index", key = key })
-				end
-			end
-		end
-
-		return pass()
-	end) :: Is<{ [number]: T }>
-end
-
---selene: allow(undefined_variable)
-type function Interface(shape)
+export type function Interface(shape)
 	local out = types.newtable()
 
 	for key, prop in shape:properties() do
@@ -636,194 +50,593 @@ type function Interface(shape)
 	return out
 end
 
-function Is.Interface<S, T>(shape: S): Is<Interface<S>>
-	return Is.new("interface", function(self, input: unknown): Result
+local INDENT = "    "
+
+local function formatKey(key: any): string
+	if typeof(key) == "string" then
+		return key
+	elseif typeof(key) == "table" then
+		return "{...}"
+	elseif typeof(key) == "number" then
+		return `[{tostring(key)}]`
+	else
+		return tostring(key)
+	end
+end
+
+local function formatValue(value: any): string
+	if typeof(value) == "string" then
+		return `"{value}"`
+	elseif typeof(value) == "table" then
+		return "{...}"
+	else
+		return tostring(value)
+	end
+end
+
+local function getIndent(depth): string
+	return string.rep(INDENT, depth)
+end
+
+local function renderTable(
+	input: { [any]: any },
+	path: { [any]: any },
+	key: any,
+	depth: number,
+	message: string,
+	becauseOf: "key" | "field",
+	lines: { string }?
+): (boolean, { string })
+	lines = lines or {}
+
+	if input == path then
+		local formattedKey = formatKey(key)
+		local formattedValue = formatValue(input[key])
+
+		table.insert(lines, getIndent(depth) .. "{")
+		table.insert(lines, getIndent(depth + 1) .. formattedKey .. " = " .. formattedValue)
+		if becauseOf == "field" then
+			table.insert(
+				lines,
+				getIndent(depth + 1)
+					.. string.rep(" ", #formattedKey + 3)
+					.. string.rep("^", #formattedValue)
+					.. " "
+					.. message
+			)
+		else
+			table.insert(lines, getIndent(depth + 1) .. string.rep("^", #formattedKey) .. " " .. message)
+		end
+
+		table.insert(lines, getIndent(depth) .. "}")
+		return true, lines
+	end
+
+	for inputKey, inputValue in input do
+		if typeof(inputValue) == "table" then
+			local childLines = {}
+			local found = renderTable(inputValue, path, key, depth + 1, message, becauseOf, childLines)
+
+			if found then
+				table.insert(lines, getIndent(depth) .. "{")
+				table.insert(lines, getIndent(depth + 1) .. formatKey(inputKey) .. " = {")
+
+				for i = 2, #childLines - 1 do
+					table.insert(lines, childLines[i])
+				end
+
+				table.insert(lines, getIndent(depth + 1) .. "}")
+				table.insert(lines, string.rep(INDENT, depth) .. "}")
+
+				return true, lines
+			end
+		end
+	end
+
+	return false, lines
+end
+
+local function formatErr(err: Error): string
+	local depth = 0
+	local gotType = nil
+
+	if err.Path and err.Key then
+		if err.BecauseOf == "key" then
+			gotType = typeof(err.Key)
+		else
+			gotType = typeof(err.Path[err.Key])
+		end
+	else
+		gotType = typeof(err.Input)
+	end
+
+	local message = `expected {err.Expected}, got {gotType}`
+
+	if err.Message then
+		message ..= ": " .. err.Message
+	end
+
+	if typeof(err.Input) == "table" and typeof(err.Path) == "table" then
+		local _, lines = renderTable(
+			err.Input :: { [any]: any },
+			err.Path :: { [any]: any },
+			err.Key,
+			depth,
+			message,
+			err.BecauseOf or "field"
+		)
+
+		return table.concat(lines, "\n")
+	else
+		local formattedValue = formatValue(err.Input)
+		local lines = {}
+
+		table.insert(lines, formattedValue)
+		table.insert(lines, string.rep("^", #formattedValue) .. " " .. message)
+
+		return table.concat(lines, "\n")
+	end
+end
+
+local Predicate = {}
+
+export type Predicate<T> = typeof(setmetatable(
+	{} :: {
+		Kind: string,
+		Type: T,
+		_predicate: (self: any, input: unknown) -> Result,
+	},
+	Predicate
+))
+
+function Predicate.new<T>(kind: string, check: (self: Predicate<T>, input: unknown) -> Result): Predicate<T>
+	return setmetatable({
+		Kind = kind,
+		_predicate = check,
+		Type = nil :: T,
+	}, Predicate) :: Predicate<T>
+end
+
+function Predicate.__call<T>(self: Predicate<any>, input: T): T
+	local result = self:_predicate(input)
+	if result.Ok then
+		return input
+	end
+
+	error(formatErr(result.Error))
+end
+
+function Predicate.Try<T>(self: Predicate<T>, input: unknown): (boolean, T | string)
+	local result = self:_predicate(input)
+	if result.Ok then
+		return true, input
+	end
+
+	return false, formatErr(result.Error)
+end
+
+local Is = {}
+Is.__index = Is
+
+export type Is = typeof(setmetatable({}, Is))
+
+function Is.Fail(
+	input: any,
+	expected: string,
+	message: string?,
+	path: {}?,
+	key: string?,
+	becauseOf: "field" | "key"?
+): Result
+	return {
+		Ok = false,
+		Error = {
+			Input = input,
+			Expected = expected,
+			Message = message,
+			Path = path :: { [any]: any },
+			Key = key,
+			BecauseOf = becauseOf,
+		},
+	}
+end
+
+function Is.Pass(): Result
+	return { Ok = true, Error = {
+		Expected = "",
+	} }
+end
+
+local function TypeOf<T>(typeName: string): () -> Predicate<T>
+	return function()
+		return Predicate.new(typeName, function(self: Predicate<T>, input)
+			if typeof(input) ~= typeName then
+				return Is.Fail(input, self.Kind)
+			end
+
+			return Is.Pass()
+		end)
+	end
+end
+
+--[[
+	Primitive Types
+]]
+
+Is.Nil = TypeOf("nil") :: () -> Predicate<nil>
+Is.Boolean = TypeOf("boolean") :: () -> Predicate<boolean>
+Is.String = TypeOf("string") :: () -> Predicate<string>
+Is.Thread = TypeOf("thread") :: () -> Predicate<thread>
+Is.Function = TypeOf("function") :: () -> Predicate<(...any) -> ...any>
+Is.Table = TypeOf("table") :: () -> Predicate<{ [any]: any }>
+Is.Buffer = TypeOf("buffer") :: () -> Predicate<buffer>
+Is.Unknown = TypeOf("unknown") :: () -> Predicate<unknown>
+Is.UserData = TypeOf("userdata") :: () -> Predicate<unknown>
+Is.Number = TypeOf("number") :: () -> Predicate<number>
+
+function Is.Any(): Predicate<any>
+	return Predicate.new("any", function(): Result
+		return Is.Pass()
+	end)
+end
+
+function Is.Literal<T>(value: T): Predicate<T>
+	return Predicate.new("literal", function(self, input: unknown): Result
+		if input ~= value then
+			return Is.Fail(input, self.Kind)
+		end
+
+		return Is.Pass()
+	end)
+end
+
+Is.Exact = Is.Literal
+Is.Singleton = Is.Literal
+
+--[[
+	Issa Types
+]]
+
+function Is.Predicate<T>(): Predicate<Predicate<T>>
+	return Predicate.new("predicate", function(self, input: unknown): Result
 		if typeof(input) ~= "table" then
-			return fail(self.kind, input, "input is not a table")
+			return Is.Fail(input, self.Kind)
+		end
+
+		if getmetatable(input) ~= Is then
+			return Is.Fail(input, self.Kind)
+		end
+
+		return Is.Pass()
+	end) :: Predicate<Predicate<T>>
+end
+
+function Is.Not<T>(predicate: Predicate<T>): Predicate<unknown>
+	return Predicate.new("not " .. predicate.Kind, function(self, input: unknown): Result
+		if predicate:_predicate(input).Ok then
+			return Is.Fail(input, self.Kind)
+		end
+
+		return Is.Pass()
+	end)
+end
+
+function Is.Optional<T>(predicate: Predicate<T>): Predicate<T?>
+	return Predicate.new("optional", function(_self, input: unknown): Result
+		if input == nil then
+			return Is.Pass()
+		end
+
+		return predicate:_predicate(input)
+	end)
+end
+
+function Is.Never()
+	return Predicate.new("never", function()
+		error("value is never allowed")
+	end)
+end
+
+--[[
+	Structural / Complex Types
+]]
+
+function Is.Refine<T>(predicate: Predicate<T>, refinement: (input: T) -> Result): Predicate<T>
+	local predicateCheck = predicate._predicate
+
+	return Predicate.new(predicate.Kind, function(self, input)
+		local predicateCheckResult = predicateCheck(self, input)
+
+		if not predicateCheckResult.Ok then
+			return predicateCheckResult
+		end
+
+		return refinement(input)
+	end)
+end
+
+function Is.Map<K, V>(expectedKey: K & Predicate<any>, expectedValue: V & Predicate<any>): Predicate<Map<K, V>>
+	return Predicate.new("list", function(self, input: unknown): Result
+		if typeof(input) ~= "table" then
+			return Is.Fail(input, self.Kind)
+		end
+
+		local tbl = input :: { [any]: any }
+
+		for key, value in tbl do
+			local keyResult = expectedKey:_predicate(key)
+			if not keyResult.Ok then
+				local keyError = keyResult.Error
+				return Is.Fail(input, keyError.Expected, keyError.Message, input, key, "key")
+			end
+
+			local valueResult = expectedValue:_predicate(value)
+			if not valueResult.Ok then
+				local valueError = valueResult.Error
+				return Is.Fail(
+					input,
+					valueError.Expected,
+					valueError.Message,
+					valueError.Path or input,
+					valueError.Key or key,
+					valueError.BecauseOf
+				)
+			end
+		end
+
+		return Is.Pass()
+	end) :: never
+end
+
+function Is.Set<T>(key: T & Predicate<any>): Predicate<Map<T, true>>
+	return Is.Map(key, Is.Literal(true))
+end
+
+function Is.Keys<T>(predicate: T & Predicate<any>): Predicate<Map<Predicate<T>, any>>
+	return Is.Map(predicate, Is.Any())
+end
+
+function Is.Values<T>(predicate: T & Predicate<any>): Predicate<Map<Predicate<any>, T>>
+	return Is.Map(Is.Any(), predicate)
+end
+
+function Is.Array<T>(predicate: T & Predicate<any>): Predicate<Map<Predicate<number>, T>>
+	return Predicate.new("array", function(self, input: unknown): Result
+		if typeof(input) ~= "table" then
+			return Is.Fail(input, self.Kind)
+		end
+
+		local tbl = input :: { [any]: any }
+
+		for key, value in tbl do
+			if typeof(key) ~= "number" then
+				return Is.Fail(input, "array key", "non-number key", tbl, key, "key")
+			end
+
+			if key % 1 ~= 0 or key < 1 then
+				return Is.Fail(input, "array key", "non positive integer key", tbl, key, "key")
+			end
+
+			if predicate then
+				local result = (predicate :: Predicate<any>):_predicate(value)
+				if not result.Ok then
+					return Is.Fail(
+						input,
+						result.Error.Expected,
+						result.Error.Message,
+						result.Error.Path,
+						result.Error.Key,
+						result.Error.BecauseOf
+					)
+				end
+			end
+		end
+
+		return Is.Pass()
+	end) :: Predicate<Map<number, T>>
+end
+
+function Is.Interface<S>(shape: S & { [string]: Predicate<any> }): Predicate<Interface<S>>
+	return Predicate.new("interface", function(self, input: unknown): Result
+		if typeof(input) ~= "table" then
+			return Is.Fail(input, self.Kind)
 		end
 
 		local tbl = input :: { [any]: any }
 
 		for key, _ in tbl do
 			if typeof(key) ~= "string" then
-				return fail("string", key, "non-string key in interface", {
-					{ kind = "key", key = key },
-				})
+				return Is.Fail(input, self.Kind, "non-string key in interface", input, key, "key")
 			end
 		end
 
-		for key, predicate in (shape :: { [string]: Is<any>? }) do
-			local result = (predicate :: Is<any>):_predicate(tbl[key])
-			if not result.ok then
-				return failFromChild(result.error, { kind = "field", key = key })
+		for key, predicate in shape :: { [string]: Predicate<any>? } do
+			if tbl[key] == nil then
+				return Is.Fail(input, self.Kind, `missing key "{key}"`)
+			end
+
+			local result = (predicate :: Predicate<any>):_predicate(tbl[key])
+			if not result.Ok then
+				local err = result.Error
+
+				return Is.Fail(
+					input,
+					err.Expected,
+					err.Message,
+					err.Path or tbl,
+					err.Key or key,
+					err.BecauseOf or "field"
+				)
 			end
 		end
 
-		return pass()
-	end) :: Is<Interface<S>>
-end
-
-function Is.StrictInterface<S, T>(shape: S, strict: boolean?): Is<Interface<S> & {[never]: never}>
-	return Is.new("interface", function(self, input: unknown): Result
-		if typeof(input) ~= "table" then
-			return fail(self.kind, input, "input is not a table")
-		end
-
-		local tbl = input :: { [any]: any }
-
-		for key, value in tbl do
-			if typeof(key) ~= "string" then
-				return fail("string", key, "non-string key in interface", {
-					{ kind = "key", key = key },
-				})
-			end
-
-			if strict and (shape :: any)[key] == nil then
-				return fail("never", value, `unexpected key "{key}"`, {
-					{ kind = "field", key = key },
-				})
-			end
-		end
-
-		for key, predicate in (shape :: { [string]: Is<any>? }) do
-			local result = (predicate :: Is<any>):_predicate(tbl[key])
-			if not result.ok then
-				return failFromChild(result.error, { kind = "field", key = key })
-			end
-		end
-
-		return pass()
-	end) :: Is<Interface<S>>
+		return Is.Pass()
+	end) :: Predicate<Interface<S>>
 end
 
 Is.Structure = Is.Interface
-Is.StrictStructure = Is.StrictInterface
 
 --[[
 	Combination Types
 ]]
 
-local intersection = function(...)
-	local predicates: { Is<any> } = { ... }
+local function intersection(...)
+	local predicates: { Predicate<any> } = { ... }
 
 	local kinds = {}
 	for _, predicate in predicates do
-		table.insert(kinds, predicate.kind)
+		table.insert(kinds, predicate.Kind)
 	end
 
 	local kind = table.concat(kinds, " & ")
 
-	return Is.new(kind, function(_self, input: unknown): Result
+	return Predicate.new(kind, function(_self, input: unknown): Result
 		for _, predicate in predicates do
 			if predicate ~= nil then
 				local result = predicate:_predicate(input)
-				if not result.ok then
-					result.error.expected = kind
+				if not result.Ok then
+					result.Error.Expected = kind
 
 					return result
 				end
 			end
 		end
 
-		return pass()
-	end) :: any
+		return Is.Pass()
+	end)
 end
 
-Is.Intersection = intersection :: <A, B, C, D, E, F>(
-	a: Is<A>,
-	b: Is<B>,
-	c: Is<C>?,
-	d: Is<D>?,
-	e: Is<E>?,
-	f: Is<F>?
-) -> Is<IntersectionType<A, B, C, D, E, F>>
+type IntersectionType = <A, B, C, D, E, F>(
+	a: A,
+	b: B,
+	c: C?,
+	d: D?,
+	e: E?,
+	f: F?
+) -> Predicate<Intersection<A, B, C, D, E, F>>
 
-local union = (function(...)
-	local predicates: { Is<any> } = { ... }
-	
+Is.Intersection = intersection :: IntersectionType
+Is.And = intersection :: IntersectionType
+
+local union = function(...)
+	local predicates: { Predicate<any> } = { ... }
+
 	local kinds = {}
 	for _, predicate in predicates do
-		table.insert(kinds, predicate.kind)
+		table.insert(kinds, predicate.Kind)
 	end
 
 	local kind = table.concat(kinds, " | ")
 
-	return Is.new(kind, function(self, input: unknown): Result
+	return Predicate.new(kind, function(self, input: unknown): Result
+		local err
 		for _, predicate in predicates do
-			if predicate:_predicate(input).ok then
-				return pass()
+			local result = predicate:_predicate(input) :: Result
+			if result.Ok then
+				return Is.Pass()
+			else
+				err = result.Error
 			end
 		end
 
-		return fail(self.kind, input)
+		if err then
+			return Is.Fail(input, self.Kind, err.Message, err.Path, err.Key, err.BecauseOf)
+		end
+
+		return Is.Pass()
 	end)
-end) :: <A, B, C, D, E, F>(a: Is<A>, b: Is<B>, c: Is<C>?, d: Is<D>?, e: Is<E>?, f: Is<F>?) -> Is<Union<A, B, C, D, E, F>>
-
-Is.Union = union
-Is.Or = union
-
-function Is.Instance(className: string?): Is<Instance>
-	return Is.new(className and `Instance<{className}>` or "Instance", function(self, input: unknown): Result
-		if typeof(input) ~= "Instance" then
-			return fail(self.kind, input)
-		end
-
-		if className and not input:IsA(className) then
-			return fail(self.kind, input, `expected IsA("{className}")`)
-		end
-
-		return pass()
-	end) :: Is<Instance>
 end
+
+type UnionType =
+	(<A, B>(a: Predicate<A>, b: Predicate<B>) -> Predicate<A | B>)
+	& (<A, B, C>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>) -> Predicate<A | B | C>)
+	& (<A, B, C, D>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>, d: Predicate<D>) -> Predicate<A | B | C | D>)
+	& (<A, B, C, D, E>(
+		a: Predicate<A>,
+		b: Predicate<B>,
+		c: Predicate<C>,
+		d: Predicate<D>,
+		e: Predicate<E>
+	) -> Predicate<A | B | C | D | E>)
+	& (<A, B, C, D, E, F>(
+		a: Predicate<A>,
+		b: Predicate<B>,
+		c: Predicate<C>,
+		d: Predicate<D>,
+		e: Predicate<E>,
+		f: Predicate<F>
+	) -> Predicate<A | B | C | D | E | F>)
+
+Is.Union = union :: UnionType
+Is.Or = union :: UnionType
+
+function Is.Instance(className: string?): Predicate<Instance>
+	return Predicate.new(
+			className and `Instance<{className}>` or "Instance",
+			function(self, input: unknown): Result
+				if typeof(input) ~= "Instance" then
+					return Is.Fail(input, self.Kind)
+				end
+
+				if className and not input:IsA(className) then
+					return Is.Fail(input, self.Kind, `expected IsA("{className}")`)
+				end
+
+				return Is.Pass()
+			end
+		) :: Predicate<Instance>
+end
+
+Is.IsA = Is.Instance
 
 --[[
 	Roblox Types
 ]]
 
-Is.Axes = TypeOf("Axes") :: () -> Is<Axes>
-Is.BrickColor = TypeOf("BrickColor") :: () -> Is<BrickColor>
-Is.CatalogSearchParams = TypeOf("CatalogSearchParams") :: () -> Is<CatalogSearchParams>
-Is.CFrame = TypeOf("CFrame") :: () -> Is<CFrame>
-Is.Color3 = TypeOf("Color3") :: () -> Is<Color3>
-Is.ColorSequence = TypeOf("ColorSequence") :: () -> Is<ColorSequence>
-Is.ColorSequenceKeypoint = TypeOf("ColorSequenceKeypoint") :: () -> Is<ColorSequenceKeypoint>
-Is.Content = TypeOf("Content") :: () -> Is<Content>
-Is.DateTime = TypeOf("DateTime") :: () -> Is<DateTime>
-Is.DockWidgetPluginGuiInfo = TypeOf("DockWidgetPluginGuiInfo") :: () -> Is<DockWidgetPluginGuiInfo>
-Is.Enum = TypeOf("Enum") :: () -> Is<Enum>
-Is.EnumItem = TypeOf("EnumItem") :: () -> Is<EnumItem>
-Is.Faces = TypeOf("Faces") :: () -> Is<Faces>
-Is.FloatCurveKey = TypeOf("FloatCurveKey") :: () -> Is<FloatCurveKey>
-Is.Font = TypeOf("Font") :: () -> Is<Font>
-Is.NumberRange = TypeOf("NumberRange") :: () -> Is<NumberRange>
-Is.NumberSequence = TypeOf("NumberSequence") :: () -> Is<NumberSequence>
-Is.NumberSequenceKeypoint = TypeOf("NumberSequenceKeypoint") :: () -> Is<NumberSequenceKeypoint>
-Is.OverlapParams = TypeOf("OverlapParams") :: () -> Is<OverlapParams>
-Is.Path2DControlPoint = TypeOf("Path2DControlPoint") :: () -> Is<Path2DControlPoint>
-Is.PathWaypoint = TypeOf("PathWaypoint") :: () -> Is<PathWaypoint>
-Is.PhysicalProperties = TypeOf("PhysicalProperties") :: () -> Is<PhysicalProperties>
-Is.Random = TypeOf("Random") :: () -> Is<Random>
-Is.Ray = TypeOf("Ray") :: () -> Is<Ray>
-Is.RaycastParams = TypeOf("RaycastParams") :: () -> Is<RaycastParams>
-Is.RaycastResult = TypeOf("RaycastResult") :: () -> Is<RaycastResult>
-Is.RBXScriptConnection = TypeOf("RBXScriptConnection") :: () -> Is<RBXScriptConnection>
-Is.RBXScriptSignal = TypeOf("RBXScriptSignal") :: () -> Is<RBXScriptSignal>
-Is.Rect = TypeOf("Rect") :: () -> Is<Rect>
-Is.Region3 = TypeOf("Region3") :: () -> Is<Region3>
-Is.Region3int16 = TypeOf("Region3int16") :: () -> Is<Region3int16>
-Is.RotationCurveKey = TypeOf("RotationCurveKey") :: () -> Is<RotationCurveKey>
-Is.Secret = TypeOf("Secret") :: () -> Is<Secret>
-Is.SecurityCapabilities = TypeOf("SecurityCapabilities") :: () -> Is<SecurityCapabilities>
-Is.SharedTable = TypeOf("SharedTable") :: () -> Is<SharedTable>
-Is.TweenInfo = TypeOf("TweenInfo") :: () -> Is<TweenInfo>
-Is.UDim = TypeOf("UDim") :: () -> Is<UDim>
-Is.UDim2 = TypeOf("UDim2") :: () -> Is<UDim2>
-Is.ValueCurveKey = TypeOf("ValueCurveKey") :: () -> Is<ValueCurveKey>
-Is.Vector2 = TypeOf("Vector2") :: () -> Is<Vector2>
-Is.Vector2int16 = TypeOf("Vector2int16") :: () -> Is<Vector2int16>
-Is.Vector3 = TypeOf("Vector3") :: () -> Is<Vector3>
-Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Is<Vector3int16>
-Is.Vector3 = TypeOf("Vector3") :: () -> Is<Vector3>
-Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Is<Vector3int16>
+Is.Axes = TypeOf("Axes") :: () -> Predicate<Axes>
+Is.BrickColor = TypeOf("BrickColor") :: () -> Predicate<BrickColor>
+Is.CatalogSearchParams = TypeOf("CatalogSearchParams") :: () -> Predicate<CatalogSearchParams>
+Is.CFrame = TypeOf("CFrame") :: () -> Predicate<CFrame>
+Is.Color3 = TypeOf("Color3") :: () -> Predicate<Color3>
+Is.ColorSequence = TypeOf("ColorSequence") :: () -> Predicate<ColorSequence>
+Is.ColorSequenceKeypoint = TypeOf("ColorSequenceKeypoint") :: () -> Predicate<ColorSequenceKeypoint>
+Is.Content = TypeOf("Content") :: () -> Predicate<Content>
+Is.DateTime = TypeOf("DateTime") :: () -> Predicate<DateTime>
+Is.DockWidgetPluginGuiInfo = TypeOf("DockWidgetPluginGuiInfo") :: () -> Predicate<DockWidgetPluginGuiInfo>
+Is.Enum = TypeOf("Enum") :: () -> Predicate<Enum>
+Is.EnumItem = TypeOf("EnumItem") :: () -> Predicate<EnumItem>
+Is.Faces = TypeOf("Faces") :: () -> Predicate<Faces>
+Is.FloatCurveKey = TypeOf("FloatCurveKey") :: () -> Predicate<FloatCurveKey>
+Is.Font = TypeOf("Font") :: () -> Predicate<Font>
+Is.NumberRange = TypeOf("NumberRange") :: () -> Predicate<NumberRange>
+Is.NumberSequence = TypeOf("NumberSequence") :: () -> Predicate<NumberSequence>
+Is.NumberSequenceKeypoint = TypeOf("NumberSequenceKeypoint") :: () -> Predicate<NumberSequenceKeypoint>
+Is.OverlapParams = TypeOf("OverlapParams") :: () -> Predicate<OverlapParams>
+Is.Path2DControlPoint = TypeOf("Path2DControlPoint") :: () -> Predicate<Path2DControlPoint>
+Is.PathWaypoint = TypeOf("PathWaypoint") :: () -> Predicate<PathWaypoint>
+Is.PhysicalProperties = TypeOf("PhysicalProperties") :: () -> Predicate<PhysicalProperties>
+Is.Random = TypeOf("Random") :: () -> Predicate<Random>
+Is.Ray = TypeOf("Ray") :: () -> Predicate<Ray>
+Is.RaycastParams = TypeOf("RaycastParams") :: () -> Predicate<RaycastParams>
+Is.RaycastResult = TypeOf("RaycastResult") :: () -> Predicate<RaycastResult>
+Is.RBXScriptConnection = TypeOf("RBXScriptConnection") :: () -> Predicate<RBXScriptConnection>
+Is.RBXScriptSignal = TypeOf("RBXScriptSignal") :: () -> Predicate<RBXScriptSignal>
+Is.Rect = TypeOf("Rect") :: () -> Predicate<Rect>
+Is.Region3 = TypeOf("Region3") :: () -> Predicate<Region3>
+Is.Region3int16 = TypeOf("Region3int16") :: () -> Predicate<Region3int16>
+Is.RotationCurveKey = TypeOf("RotationCurveKey") :: () -> Predicate<RotationCurveKey>
+Is.Secret = TypeOf("Secret") :: () -> Predicate<Secret>
+Is.SecurityCapabilities = TypeOf("SecurityCapabilities") :: () -> Predicate<SecurityCapabilities>
+Is.SharedTable = TypeOf("SharedTable") :: () -> Predicate<SharedTable>
+Is.TweenInfo = TypeOf("TweenInfo") :: () -> Predicate<TweenInfo>
+Is.UDim = TypeOf("UDim") :: () -> Predicate<UDim>
+Is.UDim2 = TypeOf("UDim2") :: () -> Predicate<UDim2>
+Is.ValueCurveKey = TypeOf("ValueCurveKey") :: () -> Predicate<ValueCurveKey>
+Is.Vector2 = TypeOf("Vector2") :: () -> Predicate<Vector2>
+Is.Vector2int16 = TypeOf("Vector2int16") :: () -> Predicate<Vector2int16>
+Is.Vector3 = TypeOf("Vector3") :: () -> Predicate<Vector3>
+Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Predicate<Vector3int16>
+Is.Vector3 = TypeOf("Vector3") :: () -> Predicate<Vector3>
+Is.Vector3int16 = TypeOf("Vector3int16") :: () -> Predicate<Vector3int16>
 
 return Is

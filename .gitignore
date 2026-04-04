@@ -12,4 +12,5 @@ lune_packages/
 pesde.lock
 aftman.toml
 selene.toml
+stylua.toml
 sourcemap.json

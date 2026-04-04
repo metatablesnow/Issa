@@ -73,9 +73,6 @@ local bobsAge: Age = "Oops!" -- This will warn you!
 ```
 use them to build more complex predicates:
 ```lua
--- Predicates are chainable!
-local IsAgeOrName = IsAge:Or(Is.String())
-
 local IsAnimal = Is.Interface({
     Name = Is.Number()
     Age = IsAge
@@ -85,12 +82,13 @@ local IsAnimal = Is.Interface({
 or even refine them:
 
 ```lua
-local IsAdult = IsAge:Refine(function(fail, pass, age)
-    if age < 18 then
-        return fail("age is below 18")
+local IsAdult = IsAnimal:Refine(function(self, animal)
+    -- Refinements run last, so no need to check if this is a table!
+    if animal.Age < 18 then
+        return Is.Fail(animal, "number over 18", "animals age is under 18", animal, "Age", "field")
     end
 
-    return pass()
+    return Is.Pass()
 end)
 
 IsAdult(13) -- This will error!
