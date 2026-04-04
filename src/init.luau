@@ -179,15 +179,14 @@ local function formatErr(err: Error): string
 end
 
 local Predicate = {}
+Predicate.__index = Predicate
 
-export type Predicate<T> = typeof(setmetatable(
-	{} :: {
-		Kind: string,
-		Type: T,
-		_predicate: (self: any, input: unknown) -> Result,
-	},
-	Predicate
-))
+export type Predicate<T> = typeof(setmetatable({} :: {
+	Kind: string,
+	Type: T,
+	_predicate: (self: any, input: unknown) -> Result,
+	Try: (self: any, input: unknown) -> (boolean, T | string),
+}, Predicate))
 
 function Predicate.new<T>(kind: string, check: (self: Predicate<T>, input: unknown) -> Result): Predicate<T>
 	return setmetatable({
@@ -341,7 +340,7 @@ end
 	Structural / Complex Types
 ]]
 
-function Is.Refine<T>(predicate: Predicate<T>, refinement: (input: T) -> Result): Predicate<T>
+function Is.Refine<T>(predicate: T & Predicate<any>, refinement: (self: T, input: any) -> Result): T
 	local predicateCheck = predicate._predicate
 
 	return Predicate.new(predicate.Kind, function(self, input)
@@ -351,7 +350,7 @@ function Is.Refine<T>(predicate: Predicate<T>, refinement: (input: T) -> Result)
 			return predicateCheckResult
 		end
 
-		return refinement(input)
+		return refinement(self, input)
 	end)
 end
 
@@ -549,22 +548,22 @@ end
 
 type UnionType =
 	(<A, B>(a: Predicate<A>, b: Predicate<B>) -> Predicate<A | B>)
-	& (<A, B, C>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>) -> Predicate<A | B | C>)
-	& (<A, B, C, D>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>, d: Predicate<D>) -> Predicate<A | B | C | D>)
-	& (<A, B, C, D, E>(
-		a: Predicate<A>,
-		b: Predicate<B>,
-		c: Predicate<C>,
-		d: Predicate<D>,
-		e: Predicate<E>
+& (<A, B, C>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>) -> Predicate<A | B | C>)
+& (<A, B, C, D>(a: Predicate<A>, b: Predicate<B>, c: Predicate<C>, d: Predicate<D>) -> Predicate<A | B | C | D>)
+& (<A, B, C, D, E>(
+	a: Predicate<A>,
+	b: Predicate<B>,
+	c: Predicate<C>,
+	d: Predicate<D>,
+	e: Predicate<E>
 	) -> Predicate<A | B | C | D | E>)
-	& (<A, B, C, D, E, F>(
-		a: Predicate<A>,
-		b: Predicate<B>,
-		c: Predicate<C>,
-		d: Predicate<D>,
-		e: Predicate<E>,
-		f: Predicate<F>
+& (<A, B, C, D, E, F>(
+	a: Predicate<A>,
+	b: Predicate<B>,
+	c: Predicate<C>,
+	d: Predicate<D>,
+	e: Predicate<E>,
+	f: Predicate<F>
 	) -> Predicate<A | B | C | D | E | F>)
 
 Is.Union = union :: UnionType
@@ -572,19 +571,19 @@ Is.Or = union :: UnionType
 
 function Is.Instance(className: string?): Predicate<Instance>
 	return Predicate.new(
-			className and `Instance<{className}>` or "Instance",
-			function(self, input: unknown): Result
-				if typeof(input) ~= "Instance" then
-					return Is.Fail(input, self.Kind)
-				end
-
-				if className and not input:IsA(className) then
-					return Is.Fail(input, self.Kind, `expected IsA("{className}")`)
-				end
-
-				return Is.Pass()
+		className and `Instance<{className}>` or "Instance",
+		function(self, input: unknown): Result
+			if typeof(input) ~= "Instance" then
+				return Is.Fail(input, self.Kind)
 			end
-		) :: Predicate<Instance>
+
+			if className and not input:IsA(className) then
+				return Is.Fail(input, self.Kind, `expected IsA("{className}")`)
+			end
+
+			return Is.Pass()
+		end
+	) :: Predicate<Instance>
 end
 
 Is.IsA = Is.Instance
