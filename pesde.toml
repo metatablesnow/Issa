@@ -1,5 +1,5 @@
 name = "metatablesnow/issa"
-version = "0.1.0"
+version = "0.2.0"
 description = "A runtime type validator with pretty errors and real types"
 authors = ["metatablesnow"]
 repository = "https://github.com/metatablesnow/Issa/tree/main"
